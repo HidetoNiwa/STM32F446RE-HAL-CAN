@@ -42,6 +42,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 CAN_HandleTypeDef hcan1;
+CAN_HandleTypeDef hcan2;
 
 UART_HandleTypeDef huart2;
 
@@ -54,6 +55,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_CAN1_Init(void);
+static void MX_CAN2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -71,6 +73,26 @@ void uart_puts(char *str) {
 		uart_putc(*str++);
 	}
 }
+
+CAN_TxHeaderTypeDef TxHeader;
+CAN_RxHeaderTypeDef RxHeader;
+
+uint8_t TxData[8];
+uint8_t RxData[8];
+uint32_t TxMailbox;
+uint8_t cnt;
+
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
+	RxHeader.IDE = CAN_ID_STD;
+	if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData) != HAL_OK) {
+		Error_Handler();
+	}
+	char buf[100];
+	sprintf(buf, " id=%d [0]=%d [1]=%d[2]=%d\r\n", RxHeader.ExtId, RxData[0],
+			RxData[1], RxData[2]);
+	uart_puts(buf);
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -102,12 +124,24 @@ int main(void) {
 	MX_GPIO_Init();
 	MX_USART2_UART_Init();
 	MX_CAN1_Init();
+	MX_CAN2_Init();
 	/* USER CODE BEGIN 2 */
 
 	char buf[100] = "Hello\r\n";
 	HAL_UART_Transmit(&huart2, (uint8_t*) buf, sizeof(buf), 0xFFFF);
 
 	uint32_t loopNum = 0;
+
+	HAL_CAN_Start(&hcan1);
+	if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING)
+			!= HAL_OK) {
+		Error_Handler();
+	}
+	HAL_CAN_Start(&hcan2);
+	if (HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO0_MSG_PENDING)
+			!= HAL_OK) {
+		Error_Handler();
+	}
 
 	/* USER CODE END 2 */
 
@@ -117,14 +151,43 @@ int main(void) {
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
-#ifdef DEBUG_SERIAL
 		sprintf(buf, "%ld\t", loopNum);
 		uart_puts(buf);
 		sprintf(buf, "\r\n");
 		uart_puts(buf);
-
-#endif
 		loopNum++;
+		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_3);
+		//HAL_Delay(100);
+
+		TxHeader.StdId = 0x01;
+		TxHeader.RTR = CAN_RTR_DATA;
+		TxHeader.IDE = CAN_ID_STD;
+		TxHeader.DLC = 3;
+		TxHeader.TransmitGlobalTime = DISABLE;
+		TxData[0] = 100;
+		TxData[1] = 200;
+		TxData[2] = 0;
+
+		/* Request transmission */
+		if (HAL_CAN_AddTxMessage(&hcan2, &TxHeader, TxData, &TxMailbox)
+				!= HAL_OK) {
+			/* Transmission request Error */
+			Error_Handler();
+		}
+		//HAL_Delay(10);
+		while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan2) != 3) {
+		}
+
+		TxHeader.StdId = 0x02;
+		if (HAL_CAN_AddTxMessage(&hcan1, &TxHeader, TxData, &TxMailbox)
+				!= HAL_OK) {
+			/* Transmission request Error */
+			Error_Handler();
+		}
+
+		/*while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) != 3) {
+		 }*/
+		HAL_Delay(10);
 	}
 	/* USER CODE END 3 */
 }
@@ -149,9 +212,9 @@ void SystemClock_Config(void) {
 	RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
 	RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
 	RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-	RCC_OscInitStruct.PLL.PLLM = 16;
-	RCC_OscInitStruct.PLL.PLLN = 336;
-	RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
+	RCC_OscInitStruct.PLL.PLLM = 8;
+	RCC_OscInitStruct.PLL.PLLN = 90;
+	RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
 	RCC_OscInitStruct.PLL.PLLQ = 2;
 	RCC_OscInitStruct.PLL.PLLR = 2;
 	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
@@ -164,7 +227,7 @@ void SystemClock_Config(void) {
 	RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
 	RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
 	RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-	RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+	RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
 	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
 		Error_Handler();
@@ -186,11 +249,11 @@ static void MX_CAN1_Init(void) {
 
 	/* USER CODE END CAN1_Init 1 */
 	hcan1.Instance = CAN1;
-	hcan1.Init.Prescaler = 16;
+	hcan1.Init.Prescaler = 10;
 	hcan1.Init.Mode = CAN_MODE_NORMAL;
 	hcan1.Init.SyncJumpWidth = CAN_SJW_1TQ;
-	hcan1.Init.TimeSeg1 = CAN_BS1_1TQ;
-	hcan1.Init.TimeSeg2 = CAN_BS2_1TQ;
+	hcan1.Init.TimeSeg1 = CAN_BS1_6TQ;
+	hcan1.Init.TimeSeg2 = CAN_BS2_2TQ;
 	hcan1.Init.TimeTriggeredMode = DISABLE;
 	hcan1.Init.AutoBusOff = DISABLE;
 	hcan1.Init.AutoWakeUp = DISABLE;
@@ -203,6 +266,41 @@ static void MX_CAN1_Init(void) {
 	/* USER CODE BEGIN CAN1_Init 2 */
 
 	/* USER CODE END CAN1_Init 2 */
+
+}
+
+/**
+ * @brief CAN2 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_CAN2_Init(void) {
+
+	/* USER CODE BEGIN CAN2_Init 0 */
+
+	/* USER CODE END CAN2_Init 0 */
+
+	/* USER CODE BEGIN CAN2_Init 1 */
+
+	/* USER CODE END CAN2_Init 1 */
+	hcan2.Instance = CAN2;
+	hcan2.Init.Prescaler = 10;
+	hcan2.Init.Mode = CAN_MODE_NORMAL;
+	hcan2.Init.SyncJumpWidth = CAN_SJW_1TQ;
+	hcan2.Init.TimeSeg1 = CAN_BS1_6TQ;
+	hcan2.Init.TimeSeg2 = CAN_BS2_2TQ;
+	hcan2.Init.TimeTriggeredMode = DISABLE;
+	hcan2.Init.AutoBusOff = DISABLE;
+	hcan2.Init.AutoWakeUp = DISABLE;
+	hcan2.Init.AutoRetransmission = DISABLE;
+	hcan2.Init.ReceiveFifoLocked = DISABLE;
+	hcan2.Init.TransmitFifoPriority = DISABLE;
+	if (HAL_CAN_Init(&hcan2) != HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN CAN2_Init 2 */
+
+	/* USER CODE END CAN2_Init 2 */
 
 }
 
@@ -288,18 +386,18 @@ void Error_Handler(void) {
 
 #ifdef  USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
+ * @brief  Reports the name of the source file and the source line number
+ *         where the assert_param error has occurred.
+ * @param  file: pointer to the source file name
+ * @param  line: assert_param error line source number
+ * @retval None
+ */
 void assert_failed(uint8_t *file, uint32_t line)
 {
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
+	/* USER CODE BEGIN 6 */
+	/* User can add his own implementation to report the file name and line number,
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
+	/* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
 
